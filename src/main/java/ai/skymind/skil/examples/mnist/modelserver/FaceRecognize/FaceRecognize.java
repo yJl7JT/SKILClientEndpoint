@@ -17,9 +17,13 @@ import java.io.File;
 import java.io.IOException;
 
 public class FaceRecognize {
-    @Parameter(names="--endpoint", description="Endpoint for classification", required=false)
-    private String skilInferenceEndpoint = "http://47.94.243.14:9008/endpoints/exp1model1/model/pepperfacerecognizevgg16/default/"; // EXAMPLE: "http://localhost:9008/endpoints/mnist/model/mnistmodel/default/";
+    static String ip = "localhost";
+    static String port = "8080";
+    static String userName = "";
+    static String password = "";
 
+    @Parameter(names="--endpoint", description="Endpoint for classification", required=false)
+    private String skilInferenceEndpoint = "http://"+ip+":"+port+"/endpoints/exp1model1/model/pepperfacerecognizevgg16/default/";
     @Parameter(names="--input", description="image input file", required=false)
     private String inputImageFile = "/face/100.jpg";
 
@@ -68,7 +72,7 @@ public class FaceRecognize {
 
     private void skilClientGetImageInference( String imgBase64 ) {
 
-        Authorization auth = new Authorization("47.94.243.14","9008");
+        Authorization auth = new Authorization(ip,port);
         String auth_token = auth.getAuthToken( "admin", "admin123" );
 
         System.out.println( "auth token: " + auth_token );
