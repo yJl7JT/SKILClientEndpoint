@@ -1,0 +1,175 @@
+
+import org.apache.commons.io.FilenameUtils
+import org.datavec.api.io.filters.BalancedPathFilter
+import org.datavec.api.io.labels.ParentPathLabelGenerator
+import org.datavec.api.split.FileSplit
+import org.datavec.api.split.InputSplit
+import org.datavec.image.loader.NativeImageLoader
+import org.datavec.image.recordreader.ImageRecordReader
+import org.datavec.image.transform.FlipImageTransform
+import org.datavec.image.transform.ImageTransform
+import org.datavec.image.transform.PipelineImageTransform
+import org.datavec.image.transform.WarpImageTransform
+import org.deeplearning4j.api.storage.StatsStorage
+import org.deeplearning4j.datasets.datavec.RecordReaderDataSetIterator
+import org.deeplearning4j.eval.Evaluation
+import org.deeplearning4j.nn.conf.GradientNormalization
+import org.deeplearning4j.nn.conf.MultiLayerConfiguration
+import org.deeplearning4j.nn.conf.NeuralNetConfiguration
+import org.deeplearning4j.nn.conf.distribution.Distribution
+import org.deeplearning4j.nn.conf.distribution.GaussianDistribution
+import org.deeplearning4j.nn.conf.distribution.NormalDistribution
+import org.deeplearning4j.nn.conf.inputs.InputType
+import org.deeplearning4j.nn.conf.inputs.InvalidInputTypeException
+import org.deeplearning4j.nn.conf.layers._
+import org.deeplearning4j.nn.multilayer.MultiLayerNetwork
+import org.deeplearning4j.nn.weights.WeightInit
+import org.deeplearning4j.optimize.listeners.ScoreIterationListener
+import org.deeplearning4j.ui.api.UIServer
+import org.deeplearning4j.ui.stats.StatsListener
+import org.deeplearning4j.ui.storage.InMemoryStatsStorage
+import org.deeplearning4j.util.ModelSerializer
+import org.nd4j.linalg.activations.Activation
+import org.nd4j.linalg.dataset.DataSet
+import org.nd4j.linalg.dataset.api.iterator.DataSetIterator
+import org.nd4j.linalg.dataset.api.preprocessor.DataNormalization
+import org.nd4j.linalg.dataset.api.preprocessor.ImagePreProcessingScaler
+import org.nd4j.linalg.learning.config.Nesterovs
+import org.nd4j.linalg.lossfunctions.LossFunctions
+import org.nd4j.linalg.primitives.Pair
+import org.nd4j.linalg.schedule.ScheduleType
+import org.nd4j.linalg.schedule.StepSchedule
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
+import java.io.File
+import java.util.Arrays
+import java.util.List
+import java.util.Random
+import java.lang.Math
+import org.deeplearning4j.nn.api.OptimizationAlgorithm
+import io.skymind.zeppelin.utils._
+import io.skymind.modelproviders.history.client.ModelHistoryClient
+import io.skymind.modelproviders.history.model._
+
+val skilContext = new SkilContext()
+val client = skilContext.client
+
+val height: Int = 100
+val width: Int = 100
+val channels: Int = 1
+val batchSize: Int = 20
+val seed: Long = 42
+val rng: Random = new Random(seed)
+val epochs: Int = 60
+val splitTrainTest: Double = 0.8
+val save: Boolean = false
+val maxPathsPerLabel: Int = 18
+val modelType: String = "AlexNet"
+var numLabels: Int = 0
+val inputShape = Array[Int](1, 224, 224)
+
+  def getData(path: String,labelMaker: ParentPathLabelGenerator):InputSplit = {
+    val mainPath: File = new File(path)
+    //    val mainPath: File = new File("C:\\Users\\п║ки\\Desktop\\photo")
+    val fileSplit: FileSplit = new FileSplit(mainPath, NativeImageLoader.ALLOWED_FORMATS, rng)
+    val numExamples: Int = Math.toIntExact(fileSplit.length)
+    numLabels = fileSplit.getRootDir.listFiles().length
+    val pathFilter: BalancedPathFilter = new BalancedPathFilter(rng, labelMaker, numExamples, numLabels, maxPathsPerLabel)
+    val inputSplit: Array[InputSplit] = fileSplit.sample(pathFilter, 1)
+    inputSplit(0)
+  }
+  
+    print("Load data....")
+    val labelMaker: ParentPathLabelGenerator = new ParentPathLabelGenerator
+    val trainData:InputSplit = getData("/home/datasets/pepperFaceRecognize1/train/",labelMaker)
+    val testData:InputSplit =  getData("/home/datasets/pepperFaceRecognize1/test/",labelMaker)
+
+
+def vgg16Model: MultiLayerNetwork = {
+    val conf: MultiLayerConfiguration = new NeuralNetConfiguration.Builder()
+      .seed(seed)
+      .weightInit(WeightInit.DISTRIBUTION)
+      .dist(new NormalDistribution(0.0, 0.01))
+      .activation(Activation.RELU)
+      .updater(new Nesterovs(new StepSchedule(ScheduleType.ITERATION, 1e-2, 0.1, 100000), 0.9))
+      .biasUpdater(new Nesterovs(new StepSchedule(ScheduleType.ITERATION, 2e-2, 0.1, 100000), 0.9))
+      .gradientNormalization(GradientNormalization.RenormalizeL2PerLayer)
+      .l2(5 * 1e-4)
+      .list()
+      // block 1
+      .layer(0, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1).padding(1, 1).nIn(channels).nOut(64).build)
+      .layer(1, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1)
+        .padding(1, 1).nOut(64).build())
+      .layer(2, new SubsamplingLayer.Builder()
+        .poolingType(SubsamplingLayer.PoolingType.MAX).kernelSize(2, 2)
+        .stride(2, 2).build())
+      // block 2
+      .layer(3, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1).padding(1, 1).nOut(128).build)
+      .layer(4, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1)
+        .padding(1, 1).nOut(128).build())
+      .layer(5, new SubsamplingLayer.Builder()
+        .poolingType(SubsamplingLayer.PoolingType.MAX).kernelSize(2, 2)
+        .stride(2, 2).build())
+      // block 3
+      .layer(6, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1).padding(1, 1).nOut(256).build)
+      .layer(7, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1)
+        .padding(1, 1).nOut(256).build())
+      .layer(8, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1)
+        .padding(1, 1).nOut(256).build())
+      .layer(9, new SubsamplingLayer.Builder()
+        .poolingType(SubsamplingLayer.PoolingType.MAX).kernelSize(2, 2)
+        .stride(2, 2).build())
+      // block 4
+      .layer(10, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1).padding(1, 1).nOut(512).build)
+      .layer(11, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1)
+        .padding(1, 1).nOut(512).build())
+      .layer(12, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1)
+        .padding(1, 1).nOut(512).build())
+      .layer(13, new SubsamplingLayer.Builder()
+        .poolingType(SubsamplingLayer.PoolingType.MAX).kernelSize(2, 2)
+        .stride(2, 2).build())
+      // block 5
+      .layer(14, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1).padding(1, 1).nOut(512).build)
+      .layer(15, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1)
+        .padding(1, 1).nOut(512).build())
+      .layer(16, new ConvolutionLayer.Builder().kernelSize(3, 3).stride(1, 1)
+        .padding(1, 1).nOut(512).build())
+      .layer(17, new SubsamplingLayer.Builder()
+        .poolingType(SubsamplingLayer.PoolingType.MAX).kernelSize(2, 2)
+        .stride(2, 2).build())
+      .layer(18, new OutputLayer.Builder(
+        LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD).name("output")
+        .nOut(numLabels).activation(Activation.SOFTMAX) // radial basis function required
+        .build())
+      .backprop(true).pretrain(false)
+      .setInputType(InputType.convolutional(height, width, channels))
+      .build();
+    return new MultiLayerNetwork(conf)
+  }
+  
+
+ print("Build model....")
+    var network: MultiLayerNetwork =vgg16Model
+    network.init
+    val uiServer: UIServer = UIServer.getInstance
+    val statsStorage: StatsStorage = new InMemoryStatsStorage
+    uiServer.attach(statsStorage)
+    network.setListeners(new StatsListener(statsStorage), new ScoreIterationListener(1))
+	
+    val recordReader: ImageRecordReader = new ImageRecordReader(height, width, channels, labelMaker)
+    var dataIter: DataSetIterator = null
+
+    val scaler: DataNormalization = new ImagePreProcessingScaler(0, 1)
+    print("Train model....")
+    recordReader.initialize(trainData, null)
+    dataIter = new RecordReaderDataSetIterator(recordReader, batchSize, 1, numLabels)
+    scaler.fit(dataIter)
+    dataIter.setPreProcessor(scaler)
+    network.fit(dataIter, epochs)
+    val TrainEval: Evaluation = network.evaluate(dataIter)
+    print(TrainEval.stats(true))
+	
+print("Save model....")
+//ModelSerializer.writeModel(network, "/var/skil/storage/face.vgg-v1.zip", true)
+val modelId = skilContext.addModelToExperiment(z, network, "face recognize model")
+val evalId = skilContext.addEvaluationToModel(z, modelId, TrainEval, "cnn " + epochs + " epochs")
