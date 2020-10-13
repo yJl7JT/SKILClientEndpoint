@@ -34,7 +34,7 @@
         
         <mapdb.version>3.0.2</mapdb.version>
         <slf4j.version>1.7.12</slf4j.version>
-        <junit.version>4.12</junit.version>
+        <junit.version>4.13.1</junit.version>
         <jcommander.version>1.27</jcommander.version>
         <maven-surefire.version>2.19.1</maven-surefire.version>
         <maven-shade-plugin.version>3.0.0</maven-shade-plugin.version>
